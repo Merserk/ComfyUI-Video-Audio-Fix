@@ -24,6 +24,26 @@ The node has no quality controls. It automatically uses the AudioSR basic model,
 48 kHz output, 50 DDIM steps, guidance scale 3.5, 10.24-second chunks, and smooth
 4% overlap for short and long videos.
 
+## Dependency isolation
+
+AudioSR 0.0.7 declares dependency versions that conflict with current ComfyUI
+installations. This repository therefore runs AudioSR in a separate Python
+process using:
+
+```text
+ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix/.venv/
+```
+
+`requirements.txt` is intentionally empty so ComfyUI Manager does not install
+AudioSR packages into ComfyUI's Python. `install.py` installs the private package
+set from `requirements-venv.txt` only into `.venv`.
+
+The private environment is created with `--system-site-packages` solely to reuse
+ComfyUI's existing Torch, TorchAudio, TorchVision, and CUDA build. AudioSR,
+SoundFile, NumPy, Librosa, Transformers, and the remaining node dependencies are
+resolved and pinned inside `.venv`, and inference runs in a subprocess. They are
+never imported into ComfyUI's running interpreter.
+
 ## What it preserves
 
 - The original container/extension for file-backed inputs
@@ -38,43 +58,60 @@ codec accepted by the original container. The video itself is not re-encoded.
 
 ## Installation
 
-1. Clone this repository into `ComfyUI/custom_nodes`:
+1. Place or clone the repository at:
 
-   ```bash
-   cd ComfyUI/custom_nodes
-   git clone https://github.com/Merserk/ComfyUI-Video-Audio-Fix.git
+   ```text
+   ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix
    ```
 
-2. Install everything with the same Python used by ComfyUI:
+2. Run `install.py` with the Python used by ComfyUI.
+
+   Windows Portable example:
+
+   ```bat
+   C:\Portable\AI\ComfyUI_windows_portable\python_embeded\python.exe C:\Portable\AI\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
+   ```
+
+   Standard installation example:
 
    ```bash
-   cd ComfyUI-Video-Audio-Fix
+   cd ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix
    python install.py
    ```
 
-   For the Windows portable build, run it from the portable root with:
+   The installer will:
 
-   ```bat
-   python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
-   ```
+   1. Create `.venv` inside this repository.
+   2. Install all AudioSR/node packages into that `.venv` only.
+   3. Verify that the private worker can import AudioSR and reuse ComfyUI's Torch.
+   4. Download and validate a private portable FFmpeg and FFprobe pair.
 
-   `install.py` installs `requirements.txt`, then installs `audiosr==0.0.7` with
-   `--no-deps`. This avoids the upstream package's obsolete dependency pins, which
-   can otherwise downgrade NumPy, Librosa, Transformers, or Torch in a modern
-   ComfyUI environment.
-
-   The installer also checks for `ffmpeg` and `ffprobe`. When both are not already
-   available, it downloads portable static binaries and stores copies in:
+   Portable binaries are stored at:
 
    ```text
    ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix/bin/
    ```
 
-   No system `PATH` modification and no administrator access are required. The
-   node prefers its private binaries, then system binaries, and finally attempts
-   the portable downloader as a first-run fallback.
+   No administrator access or system `PATH` change is required.
 
 3. Restart ComfyUI.
+
+## Rebuilding the private environment
+
+After updating the repository, or when the private runtime becomes damaged:
+
+1. Close ComfyUI.
+2. Delete only this folder:
+
+   ```text
+   ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix/.venv
+   ```
+
+3. Run `install.py` again with ComfyUI's Python.
+4. Restart ComfyUI.
+
+Do not run `pip install -r requirements-venv.txt` with ComfyUI's Python directly.
+The installer deliberately targets the repository-local `.venv`.
 
 ## Model
 
@@ -93,16 +130,18 @@ already exist at that path.
 1. Resolve or materialize the input `VIDEO`.
 2. Select the default audio track, or the first audio track when no default is set.
 3. Extract it as 48 kHz floating-point WAV.
-4. Restore each channel with AudioSR in overlapping chunks. LFE is passed through.
-5. Preserve original low-frequency content and use AudioSR for restored highs with
+4. Launch the isolated `.venv` AudioSR worker.
+5. Restore each channel in overlapping chunks; LFE is passed through.
+6. Preserve original low-frequency content and use AudioSR for restored highs with
    an automatically detected crossover.
-6. Match the exact source audio sample length.
-7. Replace only the selected audio track and copy all video packets unchanged.
-8. Validate the result and return a native `PreviewVideo` result.
+7. Match the exact source audio sample length.
+8. Replace only the selected audio track and copy all video packets unchanged.
+9. Validate the result and return a native `PreviewVideo` result.
 
 ## Notes
 
-- The first run downloads a large model and loads it into memory.
+- The first run downloads a large model and loads it into a separate process.
+- The AudioSR model is loaded once per node execution, then the private worker exits.
 - AudioSR inference is computationally expensive, especially for long or
   multichannel videos.
 - If the incoming ComfyUI `VIDEO` exists only as frames/components, ComfyUI must
@@ -110,36 +149,40 @@ already exist at that path.
   still copies that materialized video stream without another video encode.
 - Audio super-resolution cannot reliably repair every kind of clipping,
   distortion, or compression artifact.
-- A same-container merge can fail when the local FFmpeg build has no compatible
-  audio encoder. The node reports the error rather than silently changing the
-  container or re-encoding the video.
+- A same-container merge can fail when FFmpeg has no compatible audio encoder.
+  The node reports the error instead of silently changing the container or
+  re-encoding the video.
 
 ## Troubleshooting
 
-### `No module named 'soundfile'`
+### Private environment is missing or processing fails
 
-Install the repository requirements with ComfyUI's own Python, then restart
-ComfyUI. For Windows portable:
-
-```bat
-C:\path\to\ComfyUI_windows_portable\python_embeded\python.exe -m pip install -r C:\path\to\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\requirements.txt
-```
-
-Do not use a different system Python, because ComfyUI will not see packages
-installed into that environment.
-
-### `FFmpeg and FFprobe are unavailable`
-
-Run the repository installer with ComfyUI's own Python. It will download portable
-FFmpeg and FFprobe automatically. For Windows Portable:
+Close ComfyUI, delete the node's `.venv`, and run:
 
 ```bat
 C:\path\to\ComfyUI_windows_portable\python_embeded\python.exe C:\path\to\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
 ```
 
-The downloaded executables are local to this node; adding anything to Windows
-`PATH` is unnecessary. Delete the node's `bin` folder and rerun `install.py` to
-redownload them.
+The installer performs a final `audiosr_worker.py --check` import test. Read the
+last displayed error if verification fails.
+
+### `No module named soundfile`
+
+This error should not occur in the updated architecture because ComfyUI no longer
+imports SoundFile. Delete `.venv`, rerun `install.py`, and confirm the private
+runtime check succeeds.
+
+### FFmpeg and FFprobe are unavailable
+
+Rerun `install.py`. It downloads both executables through the private `.venv` and
+copies them to the node's `bin` folder. Delete `bin` first to force a fresh download.
+
+### Packages were already installed into ComfyUI's Python
+
+Earlier repository versions installed dependencies into the host interpreter.
+The updated version does not uninstall them automatically because other custom
+nodes may rely on those packages. The new worker ignores those host versions when
+a private copy exists and does not import AudioSR into ComfyUI.
 
 ## License and attribution
 
