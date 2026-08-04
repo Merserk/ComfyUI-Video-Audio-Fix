@@ -42,7 +42,7 @@ codec accepted by the original container. The video itself is not re-encoded.
 
    ```bash
    cd ComfyUI/custom_nodes
-   git clone https://github.com/YOUR_ACCOUNT/ComfyUI-Video-Audio-Fix.git
+   git clone https://github.com/Merserk/ComfyUI-Video-Audio-Fix.git
    ```
 
 2. Install the dependencies with the same Python used by ComfyUI:
