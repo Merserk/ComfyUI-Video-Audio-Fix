@@ -1,5 +1,7 @@
 # ComfyUI Video Audio Fix
 
+**Repository:** https://github.com/Merserk/ComfyUI-Video-Audio-Fix
+
 A compact ComfyUI custom node that restores a video's default audio track with
 [AudioSR](https://github.com/haoheliu/versatile_audio_super_resolution), merges it
 back into the original container, saves the result, and shows the native ComfyUI
@@ -58,18 +60,19 @@ codec accepted by the original container. The video itself is not re-encoded.
 
 ## Installation
 
-1. Place or clone the repository at:
+1. Clone the repository into `ComfyUI/custom_nodes`:
 
-   ```text
-   ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix
+   ```bash
+   cd ComfyUI/custom_nodes
+   git clone https://github.com/Merserk/ComfyUI-Video-Audio-Fix.git
    ```
 
 2. Run `install.py` with the Python used by ComfyUI.
 
-   Windows Portable example:
+   Windows Portable, from the `ComfyUI_windows_portable` directory:
 
    ```bat
-   C:\Portable\AI\ComfyUI_windows_portable\python_embeded\python.exe C:\Portable\AI\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
+   .\python_embeded\python.exe .\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
    ```
 
    Standard installation example:
@@ -157,10 +160,10 @@ already exist at that path.
 
 ### Private environment is missing or processing fails
 
-Close ComfyUI, delete the node's `.venv`, and run:
+Close ComfyUI, delete the node's `.venv`, then run this from the `ComfyUI_windows_portable` directory:
 
 ```bat
-C:\path\to\ComfyUI_windows_portable\python_embeded\python.exe C:\path\to\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
+.\python_embeded\python.exe .\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
 ```
 
 The installer performs a final `audiosr_worker.py --check` import test. Read the
