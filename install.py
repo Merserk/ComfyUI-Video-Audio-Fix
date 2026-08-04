@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -22,10 +21,11 @@ ROOT = Path(__file__).resolve().parent
 VENV_DIR = ROOT / ".venv"
 VENV_REQUIREMENTS = ROOT / "requirements-venv.txt"
 WORKER = ROOT / "audiosr_worker.py"
+RUNTIME_COMPAT = ROOT / "runtime_compat.py"
 BIN_DIR = ROOT / "bin"
 INSTALL_MARKER = VENV_DIR / ".video_audio_fix_install.json"
 AUDIOSR_VERSION = "0.0.7"
-INSTALL_SCHEMA = "3"
+INSTALL_SCHEMA = "4"
 
 
 def _venv_python() -> Path:
@@ -54,9 +54,14 @@ def _create_venv() -> Path:
         expected_version = f"version = {sys.version_info.major}.{sys.version_info.minor}"
         uses_host_packages = "include-system-site-packages = true" in config_text
         version_matches = expected_version in config_text
-        if uses_host_packages and version_matches:
+        marker_schema = None
+        try:
+            marker_schema = json.loads(INSTALL_MARKER.read_text(encoding="utf-8")).get("install_schema")
+        except (OSError, json.JSONDecodeError):
+            pass
+        if uses_host_packages and version_matches and marker_schema == INSTALL_SCHEMA:
             return python
-        print("Existing .venv is incompatible with the current ComfyUI Python; rebuilding it.")
+        print("Existing .venv is incomplete or uses an older install schema; rebuilding it.")
 
     if VENV_DIR.exists():
         shutil.rmtree(VENV_DIR, ignore_errors=True)
@@ -118,87 +123,15 @@ def _probe_host_torch() -> dict[str, str | None]:
         "torch": str(torch.__version__),
         "cuda": str(torch.version.cuda) if torch.version.cuda else None,
         "hip": str(getattr(torch.version, "hip", None) or "") or None,
-        # These packages may be absent or broken in ComfyUI's interpreter. Their
-        # private versions are derived from Torch instead of imported globally.
-        "torchvision": None,
-        "torchaudio": None,
     }
 
-
-def _public_version(version: str) -> str:
-    return version.split("+", 1)[0]
-
-
-def _torchvision_version(torch_version: str, detected: str | None) -> str:
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", _public_version(torch_version))
-    if not match:
-        raise RuntimeError(f"Cannot determine a matching TorchVision version for Torch {torch_version}.")
-    major, minor, patch = (int(value) for value in match.groups())
-    if major == 2:
-        return f"0.{minor + 15}.{patch}"
-    if major == 1 and minor == 13:
-        return f"0.14.{patch}"
-    if detected:
-        return _public_version(detected)
-    raise RuntimeError(
-        f"Torch {torch_version} is outside the supported automatic compatibility map. "
-        "Install a current official ComfyUI build, then rerun install.py."
-    )
-
-
-def _torchaudio_version(torch_version: str, detected: str | None) -> str:
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", _public_version(torch_version))
-    if not match:
-        raise RuntimeError(f"Cannot determine a matching TorchAudio version for Torch {torch_version}.")
-    major, minor, patch = (int(value) for value in match.groups())
-    if major == 2:
-        return f"{major}.{minor}.{patch}"
-    if major == 1 and minor == 13:
-        return f"0.13.{patch}"
-    if detected:
-        return _public_version(detected)
-    raise RuntimeError(
-        f"Torch {torch_version} is outside the supported automatic compatibility map. "
-        "Install a current official ComfyUI build, then rerun install.py."
-    )
-
-
-def _pytorch_wheel_index(torch_info: dict[str, str | None]) -> str | None:
-    if sys.platform == "darwin":
-        return None
-
-    torch_version = torch_info["torch"] or ""
-    local = torch_version.split("+", 1)[1].lower() if "+" in torch_version else ""
-    for prefix in ("cu", "rocm", "xpu", "cpu"):
-        if local.startswith(prefix):
-            # Nightly/local metadata may append extra dot-separated text. Official
-            # wheel indexes use the first build token, e.g. cu130 or rocm6.4.
-            if prefix == "rocm":
-                match = re.match(r"^(rocm\d+(?:\.\d+)?)", local)
-            else:
-                match = re.match(rf"^({prefix}\d*)", local)
-            if match:
-                return f"https://download.pytorch.org/whl/{match.group(1)}"
-
-    cuda = torch_info.get("cuda")
-    if cuda:
-        parts = re.findall(r"\d+", cuda)
-        if len(parts) >= 2:
-            return f"https://download.pytorch.org/whl/cu{parts[0]}{parts[1]}"
-
-    hip = torch_info.get("hip")
-    if hip:
-        match = re.match(r"(\d+\.\d+)", hip)
-        if match:
-            return f"https://download.pytorch.org/whl/rocm{match.group(1)}"
-
-    return "https://download.pytorch.org/whl/cpu"
 
 
 def _requirements_fingerprint(torch_info: dict[str, str | None]) -> str:
     digest = hashlib.sha256()
     digest.update(VENV_REQUIREMENTS.read_bytes())
     digest.update(WORKER.read_bytes())
+    digest.update(RUNTIME_COMPAT.read_bytes())
     digest.update(Path(__file__).read_bytes())
     digest.update(AUDIOSR_VERSION.encode("utf-8"))
     digest.update(INSTALL_SCHEMA.encode("ascii"))
@@ -251,58 +184,6 @@ def _verify_runtime(venv_python: Path) -> bool:
     return result.returncode == 0
 
 
-def _install_pytorch_companions(
-    venv_python: Path,
-    torch_info: dict[str, str | None],
-) -> None:
-    """Install binary packages compiled for the exact host Torch release.
-
-    Torch itself remains provided by ComfyUI through --system-site-packages.
-    TorchAudio and TorchVision are force-installed into this repository's .venv,
-    so no package is added to or changed in ComfyUI's Python environment.
-    """
-    torch_version = torch_info["torch"]
-    if not torch_version:
-        raise RuntimeError("Could not determine ComfyUI's Torch version.")
-
-    audio_version = _torchaudio_version(torch_version, torch_info.get("torchaudio"))
-    vision_version = _torchvision_version(torch_version, torch_info.get("torchvision"))
-    command = [
-        str(venv_python),
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "--force-reinstall",
-        "--no-deps",
-    ]
-    index_url = _pytorch_wheel_index(torch_info)
-    if index_url:
-        command.extend(["--index-url", index_url])
-    command.extend(
-        [
-            f"torchaudio=={audio_version}",
-            f"torchvision=={vision_version}",
-        ]
-    )
-
-    build_label = index_url.rsplit("/", 1)[-1] if index_url else "macOS/PyPI"
-    print(
-        "Matching private PyTorch companions: "
-        f"Torch {torch_version}, TorchAudio {audio_version}, "
-        f"TorchVision {vision_version}, build {build_label}"
-    )
-    try:
-        _run(command, label="Installing matching TorchAudio and TorchVision in private .venv")
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            "Could not install TorchAudio/TorchVision wheels matching ComfyUI's Torch build. "
-            f"Detected Torch {torch_version}; requested TorchAudio {audio_version} and "
-            f"TorchVision {vision_version} from {index_url or 'PyPI'}. "
-            "No global packages were changed. Update ComfyUI to an official supported "
-            "Torch build and rerun install.py."
-        ) from exc
-
 
 def _install_python_runtime(venv_python: Path, torch_info: dict[str, str | None]) -> None:
     if not VENV_REQUIREMENTS.is_file():
@@ -347,7 +228,6 @@ def _install_python_runtime(venv_python: Path, torch_info: dict[str, str | None]
         ],
         label="Pinning dependencies inside private .venv",
     )
-    _install_pytorch_companions(venv_python, torch_info)
     _run(
         [
             str(venv_python),
@@ -365,8 +245,8 @@ def _install_python_runtime(venv_python: Path, torch_info: dict[str, str | None]
     if not _verify_runtime(venv_python):
         raise RuntimeError(
             "The private AudioSR environment was created, but its import check failed. "
-            "Review the messages above. TorchAudio and TorchVision are installed inside "
-            "the node's .venv and must exactly match ComfyUI's Torch release/build."
+            "Review the messages above. No TorchAudio or TorchVision wheel is required; "
+            "the worker uses internal compatibility adapters with ComfyUI's existing Torch."
         )
     _write_marker(fingerprint, torch_info)
 

@@ -19,6 +19,8 @@ from typing import Any
 
 import numpy as np
 
+from runtime_compat import install_audio_sr_compatibility
+
 
 SAMPLE_RATE = 48_000
 CHUNK_SECONDS = 10.24
@@ -46,6 +48,7 @@ def _check_runtime() -> None:
         if name not in np.__dict__:
             setattr(np, name, value)
 
+    install_audio_sr_compatibility()
     import soundfile  # noqa: F401
     import scipy  # noqa: F401
     import librosa  # noqa: F401
@@ -53,29 +56,25 @@ def _check_runtime() -> None:
     import torchaudio
     import torchvision
     import audiosr.pipeline  # noqa: F401
+    encoders = sys.modules["audiosr.latent_diffusion.modules.encoders.modules"]
 
-    private_root = Path(sys.prefix).resolve()
-    for name, module in (("TorchAudio", torchaudio), ("TorchVision", torchvision)):
-        module_file = Path(module.__file__).resolve()
-        try:
-            module_file.relative_to(private_root)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"{name} was loaded outside the node's private .venv: {module_file}"
-            ) from exc
+    if not getattr(torchaudio, "__video_audio_fix_compat__", False):
+        raise RuntimeError("Internal TorchAudio compatibility adapter was not activated.")
+    if not getattr(torchvision, "__video_audio_fix_compat__", False):
+        raise RuntimeError("Internal TorchVision compatibility adapter was not activated.")
+    if not getattr(encoders, "__video_audio_fix_compat__", False):
+        raise RuntimeError("Internal AudioSR encoder adapter was not activated.")
 
-    torch_public = str(torch.__version__).split("+", 1)[0]
-    audio_public = str(torchaudio.__version__).split("+", 1)[0]
-    if torch_public != audio_public:
-        raise RuntimeError(
-            f"TorchAudio {torchaudio.__version__} does not match Torch {torch.__version__}."
-        )
+    probe = torch.zeros(1, 480, dtype=torch.float32)
+    resampled = torchaudio.functional.resample(probe, 48_000, 24_000)
+    if tuple(resampled.shape) != (1, 240):
+        raise RuntimeError("Internal audio resampler failed its self-test.")
 
     _print(
         "Private runtime OK: "
         f"Python {sys.version_info.major}.{sys.version_info.minor}, "
         f"NumPy {np.__version__}, Torch {torch.__version__}, "
-        f"TorchAudio {torchaudio.__version__}, TorchVision {torchvision.__version__}"
+        "internal AudioSR compatibility adapters"
     )
 
 
@@ -134,9 +133,9 @@ def _load_model(checkpoint: Path) -> tuple[Any, Any, str]:
         if name not in np.__dict__:
             setattr(np, name, value)
 
+    install_audio_sr_compatibility()
     import torch
     import audiosr.pipeline as pipeline
-    import audiosr.latent_diffusion.models.ddpm as ddpm_module
 
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
@@ -149,18 +148,10 @@ def _load_model(checkpoint: Path) -> tuple[Any, Any, str]:
     config = pipeline.default_audioldm_config("basic")
     config["model"]["params"]["device"] = device
 
-    # The super-resolution path does not use the CLAP evaluator. Avoiding its
-    # construction prevents an unnecessary model download and allocation.
-    class _UnusedClap(torch.nn.Module):
-        def __init__(self, *args: Any, **kwargs: Any):
-            super().__init__()
-
-    original_clap = ddpm_module.CLAPAudioEmbeddingClassifierFreev2
-    ddpm_module.CLAPAudioEmbeddingClassifierFreev2 = _UnusedClap
-    try:
-        model = pipeline.LatentDiffusion(**config["model"]["params"])
-    finally:
-        ddpm_module.CLAPAudioEmbeddingClassifierFreev2 = original_clap
+    # runtime_compat supplies only the VAE conditioning class required by the
+    # basic AudioSR model and a no-op CLAP evaluator, avoiding unused vision/audio
+    # companion binaries that are unavailable for some ComfyUI nightly builds.
+    model = pipeline.LatentDiffusion(**config["model"]["params"])
 
     try:
         state = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
