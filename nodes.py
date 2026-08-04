@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -33,7 +34,23 @@ MODEL_FILE = "pytorch_model.bin"
 _MODEL_CACHE: dict[str, Any] = {}
 _MODEL_LOCK = threading.RLock()
 _INFERENCE_LOCK = threading.RLock()
+_MEDIA_TOOL_LOCK = threading.RLock()
 _ENCODER_CACHE: set[str] | None = None
+
+
+def _soundfile():
+    """Import SoundFile with an actionable ComfyUI-Python error message."""
+    try:
+        import soundfile as sf
+    except (ModuleNotFoundError, ImportError, OSError) as exc:
+        requirements = Path(__file__).with_name("requirements.txt")
+        raise RuntimeError(
+            "Video Audio Fix: the Python package 'SoundFile' is missing or failed to load.\n"
+            "Install this node's dependencies with the same Python executable used by ComfyUI:\n"
+            f'"{sys.executable}" -m pip install -r "{requirements}"\n'
+            "Then restart ComfyUI."
+        ) from exc
+    return sf
 
 
 def _run(command: list[str], *, label: str) -> subprocess.CompletedProcess[str]:
@@ -52,14 +69,73 @@ def _run(command: list[str], *, label: str) -> subprocess.CompletedProcess[str]:
     return process
 
 
+def _media_tool_works(path: str | Path | None) -> bool:
+    if not path:
+        return False
+    candidate = Path(path)
+    if not candidate.is_file():
+        return False
+    try:
+        result = subprocess.run(
+            [str(candidate), "-version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 def _find_media_tools() -> tuple[str, str]:
+    suffix = ".exe" if os.name == "nt" else ""
+    local_bin = Path(__file__).resolve().parent / "bin"
+    local_ffmpeg = local_bin / f"ffmpeg{suffix}"
+    local_ffprobe = local_bin / f"ffprobe{suffix}"
+    if _media_tool_works(local_ffmpeg) and _media_tool_works(local_ffprobe):
+        return str(local_ffmpeg), str(local_ffprobe)
+
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
-    if not ffmpeg or not ffprobe:
-        raise RuntimeError(
-            "Video Audio Fix: FFmpeg and FFprobe must be installed and available on PATH."
-        )
-    return ffmpeg, ffprobe
+    if ffmpeg and ffprobe:
+        return ffmpeg, ffprobe
+
+    # ComfyUI Manager normally runs install.py. This fallback also makes a
+    # manual repository copy self-healing on the first execution.
+    try:
+        with _MEDIA_TOOL_LOCK:
+            # Another execution may have completed the download while waiting.
+            if _media_tool_works(local_ffmpeg) and _media_tool_works(local_ffprobe):
+                return str(local_ffmpeg), str(local_ffprobe)
+
+            from portable_ffmpeg import get_ffmpeg
+
+            downloaded_ffmpeg, downloaded_ffprobe = get_ffmpeg()
+            if _media_tool_works(downloaded_ffmpeg) and _media_tool_works(downloaded_ffprobe):
+                try:
+                    local_bin.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(downloaded_ffmpeg, local_ffmpeg)
+                    shutil.copy2(downloaded_ffprobe, local_ffprobe)
+                    if os.name != "nt":
+                        local_ffmpeg.chmod(local_ffmpeg.stat().st_mode | 0o111)
+                        local_ffprobe.chmod(local_ffprobe.stat().st_mode | 0o111)
+                    if _media_tool_works(local_ffmpeg) and _media_tool_works(local_ffprobe):
+                        return str(local_ffmpeg), str(local_ffprobe)
+                except OSError as copy_exc:
+                    LOGGER.warning("Could not cache portable FFmpeg in the node folder: %s", copy_exc)
+                return str(downloaded_ffmpeg), str(downloaded_ffprobe)
+    except Exception as exc:
+        LOGGER.warning("Portable FFmpeg resolution failed: %s", exc)
+
+    installer = Path(__file__).with_name("install.py")
+    raise RuntimeError(
+        "Video Audio Fix: FFmpeg and FFprobe are unavailable.\n"
+        "Run the node installer with the same Python used by ComfyUI:\n"
+        f'"{sys.executable}" "{installer}"\n'
+        "The installer downloads portable binaries automatically; system PATH is not required."
+    )
 
 
 def _probe(ffprobe: str, path: Path) -> dict[str, Any]:
@@ -329,7 +405,7 @@ def _run_audiosr_chunk(
     seed: int,
     temp_file: Path,
 ) -> np.ndarray:
-    import soundfile as sf
+    sf = _soundfile()
 
     sf.write(str(temp_file), chunk, SAMPLE_RATE, subtype="FLOAT")
     with _INFERENCE_LOCK:
@@ -365,7 +441,7 @@ def _process_audio(
     auto_download: bool,
     channel_layout: str,
 ) -> tuple[int, int]:
-    import soundfile as sf
+    sf = _soundfile()
 
     info = sf.info(str(extracted))
     if info.samplerate != SAMPLE_RATE:
@@ -497,7 +573,7 @@ def _process_audio(
 
 
 def _estimate_crossover(extracted: Path) -> int:
-    import soundfile as sf
+    sf = _soundfile()
 
     info = sf.info(str(extracted))
     total = int(info.frames)

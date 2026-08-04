@@ -45,22 +45,36 @@ codec accepted by the original container. The video itself is not re-encoded.
    git clone https://github.com/Merserk/ComfyUI-Video-Audio-Fix.git
    ```
 
-2. Install the dependencies with the same Python used by ComfyUI:
+2. Install everything with the same Python used by ComfyUI:
 
    ```bash
    cd ComfyUI-Video-Audio-Fix
-   python -m pip install -r requirements.txt
    python install.py
    ```
 
-   `install.py` installs `audiosr==0.0.7` with `--no-deps` because the upstream
-   package metadata pins old NumPy/Librosa/Transformers versions that can damage a
-   modern ComfyUI environment. The compatible runtime dependencies are listed
-   separately in this repository's `requirements.txt`.
+   For the Windows portable build, run it from the portable root with:
 
-3. Ensure `ffmpeg` and `ffprobe` are available on `PATH`.
+   ```bat
+   python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
+   ```
 
-4. Restart ComfyUI.
+   `install.py` installs `requirements.txt`, then installs `audiosr==0.0.7` with
+   `--no-deps`. This avoids the upstream package's obsolete dependency pins, which
+   can otherwise downgrade NumPy, Librosa, Transformers, or Torch in a modern
+   ComfyUI environment.
+
+   The installer also checks for `ffmpeg` and `ffprobe`. When both are not already
+   available, it downloads portable static binaries and stores copies in:
+
+   ```text
+   ComfyUI/custom_nodes/ComfyUI-Video-Audio-Fix/bin/
+   ```
+
+   No system `PATH` modification and no administrator access are required. The
+   node prefers its private binaries, then system binaries, and finally attempts
+   the portable downloader as a first-run fallback.
+
+3. Restart ComfyUI.
 
 ## Model
 
@@ -100,8 +114,37 @@ already exist at that path.
   audio encoder. The node reports the error rather than silently changing the
   container or re-encoding the video.
 
+## Troubleshooting
+
+### `No module named 'soundfile'`
+
+Install the repository requirements with ComfyUI's own Python, then restart
+ComfyUI. For Windows portable:
+
+```bat
+C:\path\to\ComfyUI_windows_portable\python_embeded\python.exe -m pip install -r C:\path\to\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\requirements.txt
+```
+
+Do not use a different system Python, because ComfyUI will not see packages
+installed into that environment.
+
+### `FFmpeg and FFprobe are unavailable`
+
+Run the repository installer with ComfyUI's own Python. It will download portable
+FFmpeg and FFprobe automatically. For Windows Portable:
+
+```bat
+C:\path\to\ComfyUI_windows_portable\python_embeded\python.exe C:\path\to\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
+```
+
+The downloaded executables are local to this node; adding anything to Windows
+`PATH` is unnecessary. Delete the node's `bin` folder and rerun `install.py` to
+redownload them.
+
 ## License and attribution
 
 This custom node is MIT licensed. AudioSR is a separate upstream project by
 Haohe Liu and collaborators; its code, model, and licenses remain governed by
-the upstream project and model repository.
+the upstream project and model repository. Portable FFmpeg binaries are downloaded
+at install time rather than distributed in this repository and remain governed by
+their respective FFmpeg/build-provider licenses.
