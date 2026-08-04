@@ -41,10 +41,12 @@ AudioSR packages into ComfyUI's Python. `install.py` installs the private packag
 set from `requirements-venv.txt` only into `.venv`.
 
 The private environment is created with `--system-site-packages` solely to reuse
-ComfyUI's existing Torch, TorchAudio, TorchVision, and CUDA build. AudioSR,
-SoundFile, NumPy, Librosa, Transformers, and the remaining node dependencies are
-resolved and pinned inside `.venv`, and inference runs in a subprocess. They are
-never imported into ComfyUI's running interpreter.
+ComfyUI's existing Torch/CUDA build. The installer detects that exact Torch
+release and accelerator build, then installs matching TorchAudio and TorchVision
+wheels inside `.venv` from the corresponding official PyTorch wheel index.
+AudioSR, SoundFile, NumPy, Librosa, Transformers, and all remaining node
+dependencies are also resolved inside `.venv`. None of these packages are
+installed into or imported by ComfyUI's running interpreter.
 
 ## What it preserves
 
@@ -86,8 +88,10 @@ codec accepted by the original container. The video itself is not re-encoded.
 
    1. Create `.venv` inside this repository.
    2. Install all AudioSR/node packages into that `.venv` only.
-   3. Verify that the private worker can import AudioSR and reuse ComfyUI's Torch.
-   4. Download and validate a private portable FFmpeg and FFprobe pair.
+   3. Detect ComfyUI's Torch version and CUDA/ROCm/CPU build.
+   4. Install matching TorchAudio and TorchVision wheels inside `.venv` only.
+   5. Verify that the private worker imports the exact compatible runtime.
+   6. Download and validate a private portable FFmpeg and FFprobe pair.
 
    Portable binaries are stored at:
 
@@ -166,8 +170,17 @@ Close ComfyUI, delete the node's `.venv`, then run this from the `ComfyUI_window
 .\python_embeded\python.exe .\ComfyUI\custom_nodes\ComfyUI-Video-Audio-Fix\install.py
 ```
 
-The installer performs a final `audiosr_worker.py --check` import test. Read the
-last displayed error if verification fails.
+The installer performs a final `audiosr_worker.py --check` import test. It verifies
+that TorchAudio and TorchVision load from this node's `.venv` and that TorchAudio
+matches ComfyUI's Torch release. Read the last displayed error if verification fails.
+
+### `No module named torchaudio` or TorchAudio/Torch mismatch
+
+Update the repository and rerun `install.py`. The installer now detects
+ComfyUI's Torch build automatically and installs the matching TorchAudio and
+TorchVision binaries inside the repository-local `.venv`. It does not modify
+ComfyUI's Python packages. Existing `.venv` installations are repaired in place;
+deleting `.venv` is optional unless the installer explicitly asks for a rebuild.
 
 ### `No module named soundfile`
 

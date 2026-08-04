@@ -50,14 +50,32 @@ def _check_runtime() -> None:
     import scipy  # noqa: F401
     import librosa  # noqa: F401
     import torch
-    import torchaudio  # noqa: F401
-    import torchvision  # noqa: F401
+    import torchaudio
+    import torchvision
     import audiosr.pipeline  # noqa: F401
+
+    private_root = Path(sys.prefix).resolve()
+    for name, module in (("TorchAudio", torchaudio), ("TorchVision", torchvision)):
+        module_file = Path(module.__file__).resolve()
+        try:
+            module_file.relative_to(private_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{name} was loaded outside the node's private .venv: {module_file}"
+            ) from exc
+
+    torch_public = str(torch.__version__).split("+", 1)[0]
+    audio_public = str(torchaudio.__version__).split("+", 1)[0]
+    if torch_public != audio_public:
+        raise RuntimeError(
+            f"TorchAudio {torchaudio.__version__} does not match Torch {torch.__version__}."
+        )
 
     _print(
         "Private runtime OK: "
         f"Python {sys.version_info.major}.{sys.version_info.minor}, "
-        f"NumPy {np.__version__}, Torch {torch.__version__}"
+        f"NumPy {np.__version__}, Torch {torch.__version__}, "
+        f"TorchAudio {torchaudio.__version__}, TorchVision {torchvision.__version__}"
     )
 
 
@@ -185,18 +203,24 @@ def _run_chunk(
     pipeline: Any,
     chunk: np.ndarray,
     seed: int,
-    temp_file: Path,
 ) -> np.ndarray:
-    import soundfile as sf
+    """Run AudioSR directly from an in-memory waveform.
 
-    sf.write(str(temp_file), chunk, SAMPLE_RATE, subtype="FLOAT")
-    output = pipeline.super_resolution(
-        model,
-        str(temp_file),
-        seed=seed,
-        ddim_steps=DDIM_STEPS,
-        guidance_scale=GUIDANCE_SCALE,
-    )
+    This bypasses ``torchaudio.load`` so current TorchAudio releases do not need
+    TorchCodec merely to reopen the temporary WAV that this worker already read.
+    """
+    import torch
+
+    pipeline.seed_everything(int(seed))
+    waveform = np.asarray(chunk, dtype=np.float32)[None, :]
+    batch, duration = pipeline.make_batch_for_super_resolution(None, waveform=waveform)
+    with torch.no_grad():
+        output = model.generate_batch(
+            batch,
+            unconditional_guidance_scale=GUIDANCE_SCALE,
+            ddim_steps=DDIM_STEPS,
+            duration=duration,
+        )
     if hasattr(output, "detach"):
         output = output.detach().float().cpu().numpy()
     array = np.asarray(output, dtype=np.float32).reshape(-1)
@@ -274,7 +298,6 @@ def _process_audio(
             )
         weights.flush()
 
-        temp_chunk = work_dir / "chunk.wav"
         with sf.SoundFile(str(extracted), mode="r") as source:
             for channel in range(channels):
                 if channel in lfe:
@@ -307,7 +330,6 @@ def _process_audio(
                             pipeline,
                             padded,
                             BASE_SEED + chunk_index,
-                            temp_chunk,
                         )
                         processed = _match_chunk_level(processed, padded)
 
