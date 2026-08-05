@@ -1,5 +1,0 @@
-# Intentionally empty.
-#
-# ComfyUI and ComfyUI Manager may install this file into ComfyUI's own Python.
-# AudioSR has legacy/conflicting dependencies, so all node-specific packages are
-# installed by install.py into this repository's private .venv instead.
