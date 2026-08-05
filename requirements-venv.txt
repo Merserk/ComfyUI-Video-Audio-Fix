@@ -1,0 +1,15 @@
+# Installed only inside ComfyUI-Video-Audio-Fix/.venv.
+portable-ffmpeg==0.2.0
+huggingface_hub>=0.20,<1
+SoundFile>=0.12.1,<1
+librosa>=0.10.2,<0.12
+numpy>=1.24,<2.5
+scipy>=1.10,<2
+PyYAML>=6.0,<7
+einops>=0.7,<1
+tqdm>=4.65,<5
+psutil>=5.9,<8
+matplotlib>=3.8,<4
+tensorboardX>=2.6,<3
+scikit-learn>=1.3,<2
+pandas>=2.2,<3
