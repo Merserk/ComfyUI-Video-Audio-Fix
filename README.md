@@ -1,5 +1,7 @@
 # ComfyUI Video Audio Fix
 
+<img width="868" height="440" alt="image" src="https://github.com/user-attachments/assets/98b16e12-afb8-41b6-a248-1fc38ce4d17a" />
+
 A compact ComfyUI custom node that restores a video's default audio track with
 [FlashSR](https://github.com/jakeoneijk/FlashSR_Inference) (one-step versatile
 audio super-resolution via diffusion distillation), merges it into the selected
